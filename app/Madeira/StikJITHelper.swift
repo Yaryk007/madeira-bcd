@@ -56,6 +56,59 @@ enum StikJITHelper {
         }
     }
 
+    /// madeira-bcd: the launch gate. The JIT pool is taken with a BRK that only
+    /// an attached debugger answers, but iOS closes StikDebug about a minute
+    /// after it attaches while CS_DEBUGGED stays set -- so "Enable JIT", a
+    /// minute in the library, then Play ended in "Debugger failed to allocate
+    /// RX memory" / "JIT pool unavailable — not starting Wine" and the library
+    /// again (builds after 220; 220 took the pool at app start instead). Here,
+    /// when no debugger is attached right now, StikDebug is opened again and
+    /// the launch continues once it has attached. If it does not attach within
+    /// 90 s the launch continues as before (the old behaviour, never worse).
+    /// `env.MADEIRA_JIT_REATTACH = 0` in madeira.cfg turns the gate off.
+    private static var reattaching = false
+    static func ensureAttached(then proceed: @escaping () -> Void, failed: @escaping (String) -> Void) {
+        guard MadeiraConfig.flag("MADEIRA_JIT_REATTACH"), !jit_debugger_attached() else { proceed(); return }
+        guard !reattaching else { return }
+        reattaching = true
+        let wasEnabled = jit_check_debugged()
+        LogStore.shared.log("[jit-reattach] no debugger attached now (CS_DEBUGGED=\(wasEnabled ? 1 : 0)); "
+                            + "opening StikDebug before the launch", level: .error)
+        let bundleId = Bundle.main.bundleIdentifier ?? "com.madeira.emulator"
+        let scriptData = resolvedScriptBase64.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        guard let url = URL(string: "stikjit://enable-jit?bundle-id=\(bundleId)&script-data=\(scriptData)") else {
+            reattaching = false
+            if wasEnabled { proceed() } else { failed("Enable JIT before playing.") }
+            return
+        }
+        UIApplication.shared.open(url, options: [:]) { opened in
+            guard opened else {
+                reattaching = false
+                LogStore.shared.log("[jit-reattach] StikDebug could not be opened", level: .error)
+                if wasEnabled { proceed() } else { failed("Open StikDebug and enable JIT for Madeira, then press Play again.") }
+                return
+            }
+            let started = Date()
+            var attachedAt: Date?
+            Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { timer in
+                let active = UIApplication.shared.applicationState == .active
+                if attachedAt == nil, jit_debugger_attached() {
+                    attachedAt = Date()
+                    LogStore.shared.log("[jit-reattach] debugger attached after \(Int(Date().timeIntervalSince(started))) s", level: .success)
+                }
+                // Continue in the foreground, a moment after the attach settles.
+                if let at = attachedAt, active, Date().timeIntervalSince(at) >= 0.5 {
+                    timer.invalidate(); reattaching = false; proceed(); return
+                }
+                if Date().timeIntervalSince(started) > 90 {
+                    timer.invalidate(); reattaching = false
+                    LogStore.shared.log("[jit-reattach] no debugger after 90 s", level: .error)
+                    if jit_check_debugged() { proceed() } else { failed("JIT was not enabled. Open StikDebug, enable JIT for Madeira and press Play again.") }
+                }
+            }
+        }
+    }
+
     /// Poll every 0.5s until CS_DEBUGGED is set, then call completion.
     private static func pollForJIT(completion: @escaping (Bool) -> Void) {
         Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { timer in

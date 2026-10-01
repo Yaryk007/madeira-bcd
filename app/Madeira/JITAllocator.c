@@ -14,6 +14,7 @@
 #include <errno.h>
 #include <mach-o/dyld.h>
 #include <os/log.h>
+#include <sys/sysctl.h>
 
 // csops syscall - used to check CS_DEBUGGED flag
 #ifndef CS_DEBUGGED
@@ -375,6 +376,21 @@ static void sigtrap_handler(int sig, siginfo_t *info, void *context) {
     ucontext_t *uc = (ucontext_t *)context;
     uc->uc_mcontext->__ss.__pc += 4;
     uc->uc_mcontext->__ss.__x[0] = 0;
+}
+
+/* madeira-bcd: is a debugger attached RIGHT NOW (P_TRACED)? CS_DEBUGGED is
+ * sticky: it stays set after StikDebug detaches or is closed by iOS (about a
+ * minute after it attaches), so it cannot tell whether the BRK that takes the
+ * JIT pool will be serviced. Build 220 (125hz's ml1330) used this; the launch
+ * gate in StikJITHelper.ensureAttached reopens StikDebug when it is false.
+ * Falls back to CS_DEBUGGED when sysctl fails. */
+bool jit_debugger_attached(void) {
+    struct kinfo_proc info;
+    size_t size = sizeof(info);
+    int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid() };
+    memset(&info, 0, sizeof(info));
+    if (sysctl(mib, 4, &info, &size, NULL, 0) != 0) return jit_check_debugged();
+    return (info.kp_proc.p_flag & P_TRACED) != 0;
 }
 
 void jit_install_trap_handler(void) {

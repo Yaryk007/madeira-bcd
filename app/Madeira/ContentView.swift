@@ -1287,7 +1287,10 @@ struct ContentView: View {
                     sessionBody
                 } else if library.enabled {
                     LibraryView(play: launchLibraryEntry, enableJIT: enableJITViaStikDebug,
-                                startDock: { startDock($0, compactPool: $1) })
+                                startDock: { game, compact in
+                                    StikJITHelper.ensureAttached(then: { startDock(game, compactPool: compact) },
+                                                                 failed: { library.error = $0 })
+                                })
                 } else if vSizeClass == .compact {
                     landscapeBody
                 } else if pendingLaunch != nil {
@@ -2542,6 +2545,20 @@ struct ContentView: View {
     }
 
     private func launchLibraryEntry(_ entry: LibraryEntry) {
+        // madeira-bcd: StikDebug must be attached when the JIT pool is taken; iOS closes it
+        // about a minute after it attaches, so open it again first when it is gone.
+        guard jit_debugger_attached() || !MadeiraConfig.flag("MADEIRA_JIT_REATTACH") else {
+            StikJITHelper.ensureAttached(then: { self.launchLibraryEntryAttached(entry) },
+                                         failed: { self.library.error = $0 })
+            return
+        }
+        launchLibraryEntryAttached(entry)
+    }
+
+    private func launchLibraryEntryAttached(_ entry: LibraryEntry) {
+        // The Wine desktop's look (DesktopTheme.swift) is written to the prefix's user.reg
+        // before its session starts; nothing runs yet, so the file is not in use.
+        if entry.desktop == true { DesktopTheme.applyIfNeeded() }
         // A Steam game starts through Madeira Dock with its own launch profile (SteamGames.swift),
         // unless its Game details page chose "The game": then its own program starts below, like
         // any library game (SteamDirectStart).

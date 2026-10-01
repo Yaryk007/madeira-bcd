@@ -23,6 +23,53 @@ makes, with the reason and the evidence), `docs/WOW64.md`, `docs/BUILDING.md`.
 
 ## 0. Latest status (keep this section current; newest first)
 
+* **2026-10-01 (Claude, for a user building this repository from their own
+  fork -- not the owner):** front-end changes + a JIT launch fix. Not yet
+  built (no iOS toolchain here; `swiftc -parse` passes on every changed file,
+  host tests unchanged except check-library-sections, updated for the new
+  desktop label). CI on the fork is the check.
+  - **"JIT pool unavailable -- not starting Wine" on builds after 220.**
+    Build 220 took the pool at app start (125hz's ml1330); since 6c944a6 the
+    pool is taken when Play is pressed, with a BRK only an *attached* debugger
+    answers. iOS closes StikDebug about a minute after it attaches while
+    CS_DEBUGGED stays set, so Enable JIT -> a minute in the library -> Play
+    gave "Debugger failed to allocate RX memory" and the library again.
+    **Fix:** `jit_debugger_attached()` (P_TRACED via sysctl, as in 220) is back
+    in JITAllocator.c; `StikJITHelper.ensureAttached` reopens StikDebug before
+    a library/Dock launch when no debugger is attached now, waits for the
+    attach (`[jit-reattach]` lines) and then launches; after 90 s without one
+    it launches as before. The pool placement itself is unchanged (upstream's).
+    `env.MADEIRA_JIT_REATTACH = 0` turns the gate off. Unverified on device:
+    the user has not sent a log of the failure yet.
+  - **Console home** (ConsoleHome.swift): new default library layout
+    "Console" (new AppStorage key `madeiraHomeLayout`, so it shows once for
+    everyone; the old layouts stay in the layout menu). One row of large tiles
+    over the selected game's blurred artwork: Wine Desktop first, then
+    installed Steam games (they appear by themselves from the install
+    records, by Madeira's downloads or Valve's client in Dock) and added
+    games; tap selects, tap again / Play starts, ••• opens Game settings;
+    controller left/right/A; last tile "Add game". Below it: Steam sign-in
+    card when signed out, the account's Not installed games when signed in.
+  - **Wine Desktop as a game:** the desktop entry is titled "Wine Desktop"
+    (old "Desktop" entries renamed on load) and draws the bundled
+    `WineDesktopIcon.png` (the user's Windows 10X logo, 512 px) when it has no
+    cover.
+  - **Add game with +** (GameImport.swift): the + is a menu -- Choose game
+    folder…, Choose .exe file… (Files app, anywhere), Browse drive_c (old
+    browser). Picks outside drive_c are copied to `drive_c/Games/<name>`
+    (an .exe alone when only the file was picked); a folder with several
+    programs shows a chooser (largest non-installer first).
+  - **Wine Desktop look** (DesktopTheme.swift, Settings > Wine Desktop):
+    Modern light (default) / Modern dark / Classic Wine, an accent colour and
+    touch-friendly caption/menu/scroll sizes, written into user.reg
+    ([Control Panel\Colors], [...\Desktop\WindowMetrics]) right before a
+    desktop session. "Background" and the wallpaper keys are never touched;
+    Classic removes every managed value; first user.reg kept as
+    `user.reg.desktop-theme-bak`. `[desktop-theme]` log line.
+  - **CI in forks:** without an `msc-private` draft release the Metal Shader
+    Converter step now warns and builds the D3D12 stub when the repository
+    is not bahacan16/madeira-bcd (it still fails here).
+
 * **2026-09-30 (Claude):** builds 244-252+ -- see "Builds 228-234" section for
   the full trail. In short:
   - 32-bit **Crysis** runs (D3D10 via DXMT, ~110 FPS unrecorded on build 249).

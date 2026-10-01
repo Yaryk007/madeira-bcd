@@ -821,6 +821,12 @@ jobs:
           if [ -z "$ASSET" ]; then
             # madeira-bcd: a stub build draws nothing in any D3D12 game (build 180
             # after the release was deleted); fail instead of shipping one.
+            # A fork of this repository has no copy of the owner's draft release:
+            # it builds with the stub (D3D11/D3D9/D3D10 games are unaffected).
+            if [ "$GITHUB_REPOSITORY" != "bahacan16/madeira-bcd" ]; then
+              echo "::warning::no msc-private release in this fork -- D3D12 shader conversion is a stub in this build (D3D12 games draw nothing). Add a DRAFT release tagged msc-private with Apple's Metal Shader Converter .pkg to build the real one."
+              exit 0
+            fi
             echo "::error::no msc-private release with a .dmg/.pkg asset -- a D3D12 stub build draws nothing; re-create the DRAFT release"
             exit 1
           fi

@@ -263,7 +263,7 @@ struct LibraryEntry: Codable, Identifiable {
 
     static let desktopID = UUID(uuidString: "AF046C35-C32A-497B-92BC-0BBD14F8CB61")!
     static var desktopEntry: LibraryEntry {
-        var entry = LibraryEntry(title: "Desktop", relativePath: "windows/system32/explorer.exe", bits: 64)
+        var entry = LibraryEntry(title: "Wine Desktop", relativePath: "windows/system32/explorer.exe", bits: 64)
         entry.id = desktopID; entry.desktop = true; entry.graphicsAPI = "Wine desktop"
         return entry
     }
@@ -412,6 +412,8 @@ final class LibraryModel: ObservableObject {
             let doc = try JSONDecoder().decode(Document.self, from: Data(contentsOf: file))
             guard doc.version == 1 else { throw LibraryError.message("This library uses a newer format.") }
             entries = doc.entries
+            // madeira-bcd: the desktop is listed as "Wine Desktop".
+            for i in entries.indices where entries[i].desktop == true && entries[i].title == "Desktop" { entries[i].title = "Wine Desktop" }
         } catch {
             readOnly = true
             self.error = "Library could not be opened. The original file was preserved. " + error.localizedDescription
@@ -1229,7 +1231,11 @@ struct LibraryArtwork: View {
         GeometryReader { geometry in
         ZStack {
             Color(uiColor: .secondarySystemFill)
-            Image(systemName: entry.desktop == true ? "desktopcomputer" : "gamecontroller.fill").font(.largeTitle).foregroundStyle(.secondary)
+            if entry.desktop == true && entry.coverFile == nil {
+                WineDesktopArt()   // madeira-bcd: the Wine Desktop's logo (ConsoleHome.swift)
+            } else {
+                Image(systemName: entry.desktop == true ? "desktopcomputer" : "gamecontroller.fill").font(.largeTitle).foregroundStyle(.secondary)
+            }
             if let name = entry.coverFile,
                let image = UIImage(contentsOfFile: LibraryModel.documents.appendingPathComponent("madeira-art/" + URL(fileURLWithPath: name).lastPathComponent).path) {
                 Image(uiImage: image).resizable().scaledToFill()
@@ -1756,7 +1762,12 @@ struct LibraryView: View {
     @State private var restartNotice = false
     @State private var settingsSheet: SettingsSheet?
     @State private var settingsRefresh = 0
-    @AppStorage("madeiraLibraryLayout") private var layout = "cards"
+    // madeira-bcd: a new key so the console home is what everyone sees first once.
+    @AppStorage("madeiraHomeLayout") private var layout = "console"
+    // The + button's Files picks (GameImport.swift).
+    @State private var pickKind: GameImport.Kind?
+    @State private var picked: PickedGame?
+    @State private var steamSignIn = false
     @AppStorage("madeiraLibrarySort") private var sort = "played"
     // Collapsed state of the Other games section (MADEIRA_LIBRARY_COLLAPSE=0: no collapsing).
     @AppStorage("madeiraLibraryHideOthers") private var hideOthers = false
@@ -1819,6 +1830,7 @@ struct LibraryView: View {
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
                 Picker("Library layout", selection: $layout) {
+                    Label("Console", systemImage: "gamecontroller").tag("console")
                     Label("Cards", systemImage: "square.grid.2x2").tag("cards")
                     Label("Compact cards", systemImage: "square.grid.3x3").tag("compact")
                     Label("List", systemImage: "list.bullet").tag("list")
@@ -1832,7 +1844,13 @@ struct LibraryView: View {
                 }
             } label: { Label("Library options", systemImage: "line.3.horizontal.decrease") }
         }
-        ToolbarItem(placement: .topBarTrailing) { Button { browser = true } label: { Label("Add executable", systemImage: "plus") } }
+        ToolbarItem(placement: .topBarTrailing) {
+            Menu {
+                Button { pickKind = .folder } label: { Label("Choose game folder…", systemImage: "folder.badge.plus") }
+                Button { pickKind = .executable } label: { Label("Choose .exe file…", systemImage: "doc.badge.plus") }
+                Button { browser = true } label: { Label("Browse drive_c", systemImage: "internaldrive") }
+            } label: { Label("Add game", systemImage: "plus") }
+        }
     }
     @ToolbarContentBuilder private var settingsToolbar: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
@@ -1876,6 +1894,9 @@ struct LibraryView: View {
                 if settingsShow("memory", "JIT pool", "pool", "video memory", "VRAM", "swap", "coverage", "madsync", "sync", "eco", "all settings") {
                     RuntimeMemorySyncSettings(open: { settingsSheet = $0 }, refresh: settingsRefresh)
                 }
+            }
+            if settingsShow("Wine Desktop", "desktop", "theme", "colour", "color", "accent", "dark") {
+                DesktopThemeSettings()
             }
             if SteamSettingsSection.shown, settingsShow("Steam", "Dock", "sign in", "account", "setup") {
                 SteamSettingsSection(open: { settingsSheet = $0 })
@@ -1932,9 +1953,14 @@ struct LibraryView: View {
         ScrollViewReader { reader in
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
+                if layout == "console" {
+                    consoleHome(width: viewport.size.width)
+                } else {
                 HStack {
                     Button { selected = model.entries.first(where: { $0.desktop == true }) ?? .desktopEntry } label: {
-                        Label("Desktop", systemImage: "desktopcomputer")
+                        Label { Text("Wine Desktop") } icon: {
+                            Image(uiImage: UIImage(named: "WineDesktopIcon") ?? UIImage()).resizable().scaledToFit().frame(width: 20, height: 20)
+                        }
                             .font(.subheadline.weight(.medium)).padding(.horizontal, 14).frame(minHeight: 44)
                             .background(Color(uiColor: .secondarySystemGroupedBackground), in: Capsule())
                     }.buttonStyle(.plain)
@@ -1980,6 +2006,7 @@ struct LibraryView: View {
                 } else {
                     cells(entries, width: viewport.size.width)
                 }
+                }
             }
             // Ambient light behind the grid cards, in the content's own space so it scrolls with them.
             .backgroundPreferenceValue(AmbientGlowKey.self) { AmbientGlowLayer(items: $0) }
@@ -1987,7 +2014,7 @@ struct LibraryView: View {
         }
         .refreshable { await SteamGamesSection.refresh() }
         .onReceive(controller.commands) { command in
-            guard tab == 0, selected == nil, !browser, !onboarding.presented else { return }
+            guard tab == 0, selected == nil, !browser, !onboarding.presented, layout != "console" else { return }
             let items = entries
             let ids = [LibraryEntry.desktopID] + items.map(\.id)
             let index = ids.firstIndex(where: { $0 == focused }) ?? 0
@@ -2006,6 +2033,25 @@ struct LibraryView: View {
                 model.save(entry); browser = false; selected = entry
             } }
         }
+        .fileImporter(isPresented: Binding(get: { pickKind != nil }, set: { if !$0 { pickKind = nil } }),
+                      allowedContentTypes: pickKind == .folder ? [.folder] : [GameImport.exeType]) { result in
+            let kind = pickKind ?? .executable
+            pickKind = nil
+            switch result {
+            case .success(let url): picked = PickedGame(url: url, kind: kind)
+            case .failure(let failure): model.error = failure.localizedDescription
+            }
+        }
+        .sheet(item: $picked) { pick in
+            GameImportSheet(picked: pick.url, kind: pick.kind) { entry in
+                picked = nil
+                guard let entry else { return }
+                model.save(entry)
+                LogStore.shared.log("[game-import] added \(entry.title) (\(entry.relativePath))")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { selected = entry }
+            }
+        }
+        .sheet(isPresented: $steamSignIn) { SteamSignInView() }
         .sheet(item: $selected) { entry in
             // The details page stays up until the session's starting screen takes
             // over (or an error needs the library's alert), instead of showing the
@@ -2027,6 +2073,42 @@ struct LibraryView: View {
             if let id { withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .easeInOut(duration: 0.2)) { reader.scrollTo(id, anchor: .center) } }
         }
         }
+        }
+    }
+    /// madeira-bcd: the console home's tiles: the Wine Desktop, then the installed Steam games
+    /// and the games you added, in the library's Sort by order.
+    private var consoleItems: [LibraryEntry] {
+        let desktop = model.entries.first(where: { $0.desktop == true }) ?? .desktopEntry
+        let owned = SteamOwnedLibrary.enabled ? steamLibrary.owned : []
+        let steamItems = MadeiraDock.enabled
+            ? SteamGamesRules.groups(SteamGamesRules.items(installed: steamGames.games, owned: owned, search: search),
+                                     downloading: Set(steamLibrary.downloads.keys)).installed : []
+        let steam = steamItems.compactMap { item in item.installed.map { model.steamEntry($0, title: item.name) } }
+        var games = steam + entries
+        switch sort {
+        case "name": games.sort { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        case "size": games.sort { ($0.folderBytes ?? -1) > ($1.folderBytes ?? -1) }
+        case "added": break
+        default: games.sort { ($0.lastPlayed ?? .distantPast) > ($1.lastPlayed ?? .distantPast) }
+        }
+        let showDesktop = search.isEmpty || "Wine Desktop".localizedCaseInsensitiveContains(search)
+        return (showDesktop ? [desktop] : []) + games
+    }
+    @ViewBuilder private func consoleHome(width: CGFloat) -> some View {
+        ConsoleHome(items: consoleItems, active: tab == 0 && selected == nil && !browser && picked == nil && !onboarding.presented,
+                    open: { selected = $0 }, play: play, add: { pickKind = .folder })
+        if SteamGamesRules.showsSignIn(library: SteamOwnedLibrary.enabled, signedIn: steamLibrary.signedIn) {
+            SteamSignInCard { steamSignIn = true }
+        }
+        // The account's games that are not installed (download sheets); this also keeps the
+        // install records and the Steam library refreshed, so new installs appear as tiles.
+        if MadeiraDock.enabled {
+            SteamGamesSection(search: search, layout: "compact", sort: sort, width: width,
+                              part: .notInstalled, open: { selected = $0 })
+        }
+        if model.entries.filter({ $0.desktop != true && $0.steamAppID == nil }).isEmpty && search.isEmpty {
+            Text("Tap + to add a game: choose its folder or its .exe in the Files app. Games outside Madeira are copied into drive_c.")
+                .font(.subheadline).foregroundStyle(.secondary)
         }
     }
     private func cells(_ items: [LibraryEntry], width viewportWidth: CGFloat) -> some View {

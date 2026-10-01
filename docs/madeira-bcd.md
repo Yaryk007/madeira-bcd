@@ -128,6 +128,17 @@ long press on a game offers Play and Game settings, and "Add every game in
 drive_c" imports what madeira-bcd home would list. A library launch exports
 the update pack, the game's options and starts the per-game session log.
 
+Since 2026-10-01 the library opens in the **Console** layout
+(`ConsoleHome.swift`): a tile row (Wine Desktop, installed Steam games, added
+games) over the selected game's artwork, Play / Game settings under it. The +
+button adds a game folder or .exe from the Files app (`GameImport.swift`;
+copied into `drive_c/Games` when it lives elsewhere). Settings > Wine Desktop
+(`DesktopTheme.swift`) restyles the Wine desktop's windows, menus and taskbar
+through the system colours and window metrics in user.reg, leaving the
+wallpaper alone. Before a launch, StikDebug is reopened when iOS has already
+closed it (`StikJITHelper.ensureAttached`, `jit_debugger_attached`), so the JIT
+pool is not requested from a debugger that is gone.
+
 ## Runtime
 
 - TEB retarget pass (`build/ntdll-unix/virtual_ios.c`, pass 0 of the x18

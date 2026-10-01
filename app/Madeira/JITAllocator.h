@@ -49,6 +49,9 @@ void jit_region_invalidate(JITRegion *region, size_t offset, size_t size);
 // Returns true if the debugger has attached and set the flag.
 bool jit_check_debugged(void);
 
+/// madeira-bcd: a debugger is attached now (P_TRACED), unlike the sticky CS_DEBUGGED.
+bool jit_debugger_attached(void);
+
 /// CS_DEBUGGED without the log line — for the badge's 2s poll.
 bool jit_is_debugged_quiet(void);
 
